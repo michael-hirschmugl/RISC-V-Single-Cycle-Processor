@@ -145,32 +145,40 @@ endmodule
 
 /////////////////////////Logic for ALU Decoder//////////////////////////////////////////
 
+// Copy of the module in "ALU Decoder/Design.v", kept in step with it: this is
+// the one the controller below instantiates. The 3-bit values are the ALU's
+// (100 slt signed, 101 branch/subtract), the case is total and the assigns are
+// blocking.
 module ALUDecoder(
-    input [6:0] op,
     input [2:0] funct3,
-    input funct7,
+    input       alt,
     input [1:0] ALUop,
     output reg [2:0] ALUControl
 );
     always @(*) begin
-        if (ALUop == 2'b00) begin
-            ALUControl <= 3'b000; // ADD
-        end else if (ALUop == 2'b01) begin
-            ALUControl <= 3'b001; // SUB
-        end else if (ALUop == 2'b10) begin
-            case({funct7, funct3, op})
-                10'b0000000_000: ALUControl <= 3'b000;
-                10'b0100000_000: ALUControl <= 3'b001;
-                10'b0000000_111: ALUControl <= 3'b011;
-                10'b0000000_110: ALUControl <= 3'b010;
-                default: ALUControl <= 3'bxxx;
-            endcase
-        end
+        case (ALUop)
+            2'b00: ALUControl = 3'b000; // add: address for lw/sw
+            2'b01: ALUControl = 3'b101; // branch: subtract
+            2'b10: begin
+                case (funct3)
+                    3'b000:  ALUControl = alt ? 3'b001 : 3'b000; // sub : add
+                    3'b010:  ALUControl = 3'b100;                // slt, signed
+                    3'b110:  ALUControl = 3'b011;                // or
+                    3'b111:  ALUControl = 3'b010;                // and
+                    default: ALUControl = 3'bxxx;                // shift, xor, sltu
+                endcase
+            end
+            default: ALUControl = 3'bxxx; // ALUop 11 selects no operation
+        endcase
     end
 endmodule
 
 
 /////////////////////Logic for Main Decoder////////////////////////////////////////////////////
+// Copy of the module in "Main Decoder/Design.v", kept in step with it: this is
+// the one the controller below instantiates. Six opcodes, every output assigned
+// in every arm, blocking assigns, and `default` drives x so an unimplemented
+// instruction cannot pass as a no-op.
 module MainDecoder(
     input [6:0] op,
     output reg RegWrite,
@@ -178,49 +186,39 @@ module MainDecoder(
     output reg Branch,
     output reg ALUSrc,
     output reg [1:0] ALUop,
-    output reg [1:0] ImmSrc
+    output reg [1:0] ImmSrc,
+    output reg [1:0] ResultSrc,
+    output reg jump
 );
     always @(*) begin
-        case(op)
-            7'b0000011: begin // Load Word Instruction
-                RegWrite <= 1;
-                MemWrite <= 0;
-                Branch <= 0;
-                ALUSrc <= 1;
-                ALUop <= 2'b00;
-                ImmSrc <= 2'b00;
+        case (op)
+            7'b0000011: begin // lw
+                RegWrite = 1'b1; MemWrite = 1'b0; Branch = 1'b0; ALUSrc = 1'b1;
+                ALUop = 2'b00;   ImmSrc = 2'b00;  ResultSrc = 2'b01; jump = 1'b0;
             end
-            7'b0100011: begin // Store Word Instruction
-                RegWrite <= 0;
-                MemWrite <= 1;
-                Branch <= 0;
-                ALUSrc <= 1;
-                ALUop <= 2'b00;
-                ImmSrc <= 2'b01;
+            7'b0100011: begin // sw
+                RegWrite = 1'b0; MemWrite = 1'b1; Branch = 1'b0; ALUSrc = 1'b1;
+                ALUop = 2'b00;   ImmSrc = 2'b01;  ResultSrc = 2'b00; jump = 1'b0;
             end
-            7'b1100011: begin // Branch Instruction
-                RegWrite <= 0;
-                MemWrite <= 0;
-                Branch <= 1;
-                ALUSrc <= 0;
-                ALUop <= 2'b01;
-                ImmSrc <= 2'b10;
+            7'b1100011: begin // beq
+                RegWrite = 1'b0; MemWrite = 1'b0; Branch = 1'b1; ALUSrc = 1'b0;
+                ALUop = 2'b01;   ImmSrc = 2'b10;  ResultSrc = 2'b00; jump = 1'b0;
             end
-            7'b0010011: begin // I-type Instruction
-                RegWrite <= 1;
-                MemWrite <= 0;
-                Branch <= 0;
-                ALUSrc <= 1;
-                ALUop <= 2'b10;
-                ImmSrc <= 2'b00;
+            7'b0010011: begin // I-type ALU
+                RegWrite = 1'b1; MemWrite = 1'b0; Branch = 1'b0; ALUSrc = 1'b1;
+                ALUop = 2'b10;   ImmSrc = 2'b00;  ResultSrc = 2'b00; jump = 1'b0;
             end
-            default: begin
-                RegWrite <= 0;
-                MemWrite <= 0;
-                Branch <= 0;
-                ALUSrc <= 0;
-                ALUop <= 2'b00;
-                ImmSrc <= 2'b00;
+            7'b0110011: begin // R-type ALU
+                RegWrite = 1'b1; MemWrite = 1'b0; Branch = 1'b0; ALUSrc = 1'b0;
+                ALUop = 2'b10;   ImmSrc = 2'b00;  ResultSrc = 2'b00; jump = 1'b0;
+            end
+            7'b1101111: begin // jal
+                RegWrite = 1'b1; MemWrite = 1'b0; Branch = 1'b0; ALUSrc = 1'b0;
+                ALUop = 2'b00;   ImmSrc = 2'b11;  ResultSrc = 2'b10; jump = 1'b1;
+            end
+            default: begin // no such instruction: make it visible
+                RegWrite = 1'bx; MemWrite = 1'bx; Branch = 1'bx; ALUSrc = 1'bx;
+                ALUop = 2'bxx;   ImmSrc = 2'bxx;  ResultSrc = 2'bxx; jump = 1'bx;
             end
         endcase
     end
@@ -231,7 +229,7 @@ endmodule
 module ALUControl(
     input [6:0] op,
     input [2:0] funct3,
-    input funct7,
+    input alt,
     input zero,
     output wire PCSrc,
     output wire jump,
@@ -239,14 +237,32 @@ module ALUControl(
     output wire RegWrite,
     output wire MemWrite,
     output wire branch,
+    output wire [1:0] ResultSrc,
     output wire [1:0] ImmSrc,
     output wire [2:0] ALUControl
 );
     wire [1:0] ALUop;
-    MainDecoder md(op, RegWrite, MemWrite, branch, ALUSrc, ALUop, ImmSrc);
-    ALUDecoder ad(op, funct3, funct7, ALUop, ALUControl);
-    
-    assign PCSrc = branch & zero | jump;
+    MainDecoder md(
+        .op(op),
+        .RegWrite(RegWrite),
+        .MemWrite(MemWrite),
+        .Branch(branch),
+        .ALUSrc(ALUSrc),
+        .ALUop(ALUop),
+        .ImmSrc(ImmSrc),
+        .ResultSrc(ResultSrc),
+        .jump(jump)
+    );
+    ALUDecoder ad(
+        .funct3(funct3),
+        .alt(alt),
+        .ALUop(ALUop),
+        .ALUControl(ALUControl)
+    );
+
+    // A conditional branch needs both "this is a branch" and a zero result;
+    // jal jumps unconditionally, which is what `jump` contributes here.
+    assign PCSrc = (branch & zero) | jump;
 endmodule
 
 
