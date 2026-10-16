@@ -1,10 +1,13 @@
+`timescale 1ns / 1ps
+
 // Logic Blocks of RISC-v Processor
 
 ///////////////////Logic for MUX for PCSrc/////////////////////////////////////////////////////////////////////////////////////////////////
 
 module MUX_for_PCSrc(
-input PCPlus4, PCTarget, PCSrc,
-output  PCNext
+input [31:0] PCPlus4, PCTarget,
+input PCSrc,
+output [31:0] PCNext
     );
     
     assign PCNext = PCSrc?PCTarget:PCPlus4;
@@ -16,17 +19,21 @@ input clk, reset,
 input [31:0] pc_in,
 output reg [31:0] pc_out
     );
+    // pc_in is the *next* PC from the PC mux (PCPlus4 or PCTarget), so a cycle
+    // loads it directly; the original computed pc_in + 4, which advances the
+    // PC by eight once pc_in is already PC + 4, and reset copied pc_in instead
+    // of starting the fetch at the program's first word.
     always@(posedge clk)
     if (reset)
-        pc_out<=pc_in;
+        pc_out<=32'd0;
     else
-        pc_out<=pc_in + 4;    
+        pc_out<=pc_in;    
 endmodule
 ///////////////Logic of Adder for PCPlus4////////////////////////////////////////////////////////////////////////////////////////////////////
 
 module Adder_for_PCPlus4(
-input pc_out,
-output PCPlus4
+input [31:0] pc_out,
+output [31:0] PCPlus4
     );
     
     assign PCPlus4 = pc_out + 4;
@@ -34,8 +41,8 @@ endmodule
 
 //////////////////Logic of Adder for PCTarget/////////////////////////////////////////////////////////////////////////////////////////////
 module Adder_for_PCTarget(
-input pc_out, ImmExt,
-output PCTarget
+input [31:0] pc_out, ImmExt,
+output [31:0] PCTarget
     );
     
     assign PCTarget = pc_out + ImmExt;
@@ -55,7 +62,8 @@ output reg [31:0]RD // Instruction output
         mem[0] = 32'h00500093;  // li x1, 5 (addi x1, x0, 5)
         mem[1] = 32'h00A00113;  // li x2, 10 (addi x2, x0, 10)
         mem[2] = 32'h002081B3;  // add x3, x1, x2
-        mem[3] = 32'h00300023;  // sw x3, 0(x0)
+        mem[3] = 32'h00302023;  // sw x3, 0(x0)
+        mem[4] = 32'h00002203;  // lw x4, 0(x0)
     end
 
     // Read operation
@@ -78,13 +86,14 @@ output reg [31:0] RD2
     
     reg [31:0] register_file[31:0];
     
+    // x0 is hard-wired to zero, so a write to it is dropped.
     always@(posedge clk)
-    if (WE3)
+    if (WE3 && A3 != 5'd0)
         register_file[A3] <= WD3;
     
     always@(*) begin
-        RD1 = (A1==1)? register_file[A1]:0;
-        RD2 = (A2==1)? register_file[A2]:0;
+        RD1 = (A1 != 5'd0)? register_file[A1]:32'd0;
+        RD2 = (A2 != 5'd0)? register_file[A2]:32'd0;
     end
     
 endmodule
@@ -92,8 +101,9 @@ endmodule
 /////////////////Logic of MUX for ALUSrc/////////////////////////////////////////////////////
 
 module MUX_for_ALUSrc(
-input RD2, ImmExt, ALUSrc,
-output SrcB
+input [31:0] RD2, ImmExt,
+input ALUSrc,
+output [31:0] SrcB
     );
     assign SrcB=ALUSrc?ImmExt:RD2;
 endmodule
@@ -299,7 +309,7 @@ output reg [31:0] Result
             2'b00: Result = ALUResult; // Select ALUResult
             2'b01: Result = RD;        // Select RD
             2'b10: Result = PCPlus4;   // Select PCPlus4
-            default: Result = 32'b0;   // Default case (can be defined as needed)
+            default: Result = 32'bx;   // No such source: unknown rather than a plausible zero
         endcase
     end
 endmodule
@@ -308,7 +318,8 @@ endmodule
 module Data_Path(
     input clk, reset,
     input PCSrc, jump, ALUSrc, RegWrite,
-    input [1:0] MemWrite, ResultSrc,
+    input MemWrite,
+    input [1:0] ResultSrc,
     input [2:0] ALUControl,
     input [1:0] ImmSrc,
     input [31:0] instruction,
@@ -325,7 +336,10 @@ module Data_Path(
     program_counter pc(clk, reset, PCNext, PC_out);
     Adder_for_PCPlus4 a1(PC_out, PCPlus4);
     Adder_for_PCTarget a2(PC_out, ImmExt, PCTarget);
-    MUX_for_PCSrc m1(PCPlus4, PCTarget, PCSrc, PCNext);
+    // jump arrives separately as well as folded into PCSrc by the controller;
+    // OR-ing it in is a no-op with that controller and is what keeps the
+    // datapath working with one that hands over `branch & zero` alone.
+    MUX_for_PCSrc m1(PCPlus4, PCTarget, PCSrc | jump, PCNext);
     
     // Register File Logic Flow
     RegFile rf(RegWrite, clk, instruction[19:15], instruction[24:20], instruction[11:7], Result, SrcA, WriteData);

@@ -1,3 +1,5 @@
+`timescale 1ns / 1ps
+
 //Design of Instruction Memory
 
 module Instruction_Memory(
@@ -12,7 +14,8 @@ output reg [31:0]RD // Instruction output
         mem[0] = 32'h00500093;  // li x1, 5 (addi x1, x0, 5)
         mem[1] = 32'h00A00113;  // li x2, 10 (addi x2, x0, 10)
         mem[2] = 32'h002081B3;  // add x3, x1, x2
-        mem[3] = 32'h00300023;  // sw x3, 0(x0)
+        mem[3] = 32'h00302023;  // sw x3, 0(x0)
+        mem[4] = 32'h00002203;  // lw x4, 0(x0)
     end
 
     // Read operation
@@ -20,5 +23,3 @@ output reg [31:0]RD // Instruction output
         RD = mem[A[31:2]];  // Address decoding 
     end
 endmodule
-
- 
